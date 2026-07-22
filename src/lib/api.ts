@@ -52,10 +52,14 @@ export function deleteDocument(id: string): Promise<{ ok: true }> {
   );
 }
 
-export function askQuestion(question: string, category: Category | "all"): Promise<Answer> {
+export function askQuestion(
+  question: string,
+  category: Category | "all",
+  useWeb = false
+): Promise<Answer> {
   return fetch("/api/query", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, category }),
+    body: JSON.stringify({ question, category, useWeb }),
   }).then((r) => json<Answer>(r));
 }

@@ -9,7 +9,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
-    const { question, category } = req.body ?? {};
+    const { question, category, useWeb = false } = req.body ?? {};
     if (!question || typeof question !== "string" || question.trim().length < 3)
       return res.status(400).json({ error: "Escribe una pregunta" });
 
@@ -24,10 +24,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const relevant = (matches ?? []).filter((m: any) => m.similarity >= MIN_SIMILARITY);
 
-    if (relevant.length === 0) {
+    // Nothing in the documents. With web off (default) we stop here and say so —
+    // we never fall back to the model's own knowledge. With web on, the user has
+    // explicitly allowed a web-assisted answer.
+    if (relevant.length === 0 && !useWeb) {
       return res.status(200).json({
         answer:
-          "No encuentro nada sobre esto en tus documentos. Sube el documento relevante (un contrato, una factura, un modelo fiscal…) y vuelve a preguntar.",
+          "No encuentro nada sobre esto en tus documentos. Sube el documento relevante (un contrato, una factura, un modelo fiscal…) y vuelve a preguntar, o activa la búsqueda en internet.",
         sources: [],
       });
     }
@@ -39,7 +42,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       content: m.content,
     }));
 
-    const answer = await generateAnswer(question.trim(), passages);
+    const answer = await generateAnswer(question.trim(), passages, Boolean(useWeb));
 
     const sources = relevant.map((m: any, i: number) => ({
       n: i + 1,

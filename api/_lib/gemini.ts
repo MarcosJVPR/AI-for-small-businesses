@@ -42,26 +42,41 @@ export type Passage = {
   content: string;
 };
 
-const SYSTEM = `Eres el copiloto de una micro-empresa. Respondes preguntas de tipo legal, contable y administrativo APOYÁNDOTE ÚNICAMENTE en los fragmentos de documentos que se te entregan.
+const SYSTEM_STRICT = `Eres el copiloto de una micro-empresa. Respondes preguntas de tipo legal, contable y administrativo APOYÁNDOTE ÚNICAMENTE en los fragmentos de documentos que se te entregan.
 
 Reglas:
-- Usa solo la información de los fragmentos. Si la respuesta no está ahí, dilo con claridad ("No encuentro esto en tus documentos") y sugiere qué documento haría falta.
+- Usa SOLO la información de los fragmentos. No uses conocimiento propio ni general.
+- Si la respuesta no está en los fragmentos, dilo con claridad ("No encuentro esto en tus documentos") y sugiere qué documento haría falta. No la deduzcas de tu memoria.
 - Cita cada afirmación con el número del fragmento entre corchetes, por ejemplo [1] o [2][3].
 - No inventes cifras, plazos, artículos ni cláusulas. Si dudas, no lo afirmes.
 - Responde en el idioma de la pregunta, de forma directa y breve.
 - No eres un abogado ni un asesor fiscal colegiado: cierra con una línea recordando que conviene validar decisiones críticas con un profesional.`;
 
-export async function generateAnswer(question: string, passages: Passage[]): Promise<string> {
-  const context = passages
-    .map((p) => `[${p.n}] (${p.category} — ${p.documentTitle})\n${p.content}`)
-    .join("\n\n");
+const SYSTEM_WEB = `Eres el copiloto de una micro-empresa. Respondes preguntas de tipo legal, contable y administrativo.
 
-  const prompt = `${SYSTEM}\n\n=== FRAGMENTOS ===\n${context}\n\n=== PREGUNTA ===\n${question}`;
+Reglas:
+- Prioriza SIEMPRE los fragmentos de los documentos del usuario y cítalos con su número entre corchetes, por ejemplo [1] o [2][3].
+- El usuario ha permitido búsqueda web para esta pregunta. Úsala solo para completar lo que falte en los documentos, y cuando lo hagas, indícalo explícitamente ("según información pública…").
+- No mezcles ni presentes información web como si viniera de los documentos del usuario.
+- No inventes cifras, plazos, artículos ni cláusulas.
+- Responde en el idioma de la pregunta, de forma directa y breve.
+- No eres un abogado ni un asesor fiscal colegiado: cierra recordando validar decisiones críticas con un profesional.`;
 
-  const res = await ai.models.generateContent({
-    model: CHAT_MODEL,
-    contents: prompt,
-    config: { temperature: 0.2 },
-  });
+export async function generateAnswer(
+  question: string,
+  passages: Passage[],
+  useWeb = false
+): Promise<string> {
+  const context = passages.length
+    ? passages.map((p) => `[${p.n}] (${p.category} — ${p.documentTitle})\n${p.content}`).join("\n\n")
+    : "(no hay fragmentos relevantes en los documentos del usuario)";
+
+  const system = useWeb ? SYSTEM_WEB : SYSTEM_STRICT;
+  const prompt = `${system}\n\n=== FRAGMENTOS ===\n${context}\n\n=== PREGUNTA ===\n${question}`;
+
+  const config: Record<string, unknown> = { temperature: 0.2 };
+  if (useWeb) config.tools = [{ googleSearch: {} }];
+
+  const res = await ai.models.generateContent({ model: CHAT_MODEL, contents: prompt, config });
   return res.text ?? "No pude generar una respuesta.";
 }

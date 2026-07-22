@@ -30,6 +30,7 @@ export default function Chat({ docCount }: { docCount: number }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [filter, setFilter] = useState<Category | "all">("all");
+  const [web, setWeb] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nextId = useRef(0);
@@ -42,7 +43,7 @@ export default function Chat({ docCount }: { docCount: number }) {
     setTurns((t) => [...t, { role: "user", text: q, id: nextId.current++ }]);
     setBusy(true);
     try {
-      const res = await askQuestion(q, filter);
+      const res = await askQuestion(q, filter, web);
       setTurns((t) => [
         ...t,
         { role: "assistant", text: res.answer, sources: res.sources, id: nextId.current++ },
@@ -148,9 +149,25 @@ export default function Chat({ docCount }: { docCount: number }) {
             Enviar
           </button>
         </div>
-        <p className="mt-2 font-mono text-[10px] text-ink-soft">
-          Orientativo. No sustituye a un abogado ni a un asesor fiscal colegiado.
-        </p>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <button
+            onClick={() => setWeb((w) => !w)}
+            aria-pressed={web}
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] transition-colors ${
+              web
+                ? "border-viridian bg-viridian text-surface"
+                : "border-line bg-surface text-ink-soft hover:border-viridian"
+            }`}
+          >
+            <span
+              className={`inline-block h-1.5 w-1.5 rounded-full ${web ? "bg-highlight" : "bg-ink-soft/40"}`}
+            />
+            {web ? "Internet: activado" : "Solo mis documentos"}
+          </button>
+          <p className="font-mono text-[10px] text-ink-soft">
+            Orientativo. No sustituye a un profesional.
+          </p>
+        </div>
       </div>
     </div>
   );
