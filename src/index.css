@@ -1,0 +1,63 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #eceae2;
+  --color-surface: #fbfbf8;
+  --color-ink: #17191c;
+  --color-ink-soft: #565a5f;
+  --color-line: #dbd8cd;
+  --color-viridian: #0d5b45;
+  --color-viridian-ink: #0a4636;
+  --color-highlight: #f4d35e;
+
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  ::selection {
+    background: var(--color-highlight);
+    color: var(--color-ink);
+  }
+}
+
+/* Signature: citations look like little highlighter tabs pressed onto the page. */
+.cite {
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  font-weight: 500;
+  background: var(--color-highlight);
+  color: var(--color-ink);
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  cursor: default;
+  vertical-align: baseline;
+}
+
+/* Source excerpts read like a passage marked with a highlighter in the margin. */
+.marked {
+  background: linear-gradient(transparent 62%, color-mix(in srgb, var(--color-highlight) 55%, transparent) 62%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
