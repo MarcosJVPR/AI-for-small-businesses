@@ -1,48 +1,112 @@
 import { useRef, useState } from "react";
-import { ingestDocument, type Category } from "../lib/api";
+import { createDocument, storeChunks, deleteDocument, type Category } from "../lib/api";
 import { CATEGORY_LABEL, CATEGORY_OPTIONS } from "../lib/categories";
-import { extractText } from "../lib/extract";
+import { extractText, type Progress } from "../lib/extract";
+import { chunkText } from "../lib/chunk";
+
+const BATCH = 15;
+
+type Status = "reading" | "ocr" | "indexing" | "done" | "error";
+type Item = { id: number; name: string; status: Status; detail: string };
+
+function guessCategory(name: string): Category {
+  const n = name.toLowerCase();
+  if (/(contrato|acuerdo|nda|clausul|arrendamiento|laboral|estatuto|convenio|escritura)/.test(n))
+    return "legal";
+  if (/(factura|iva|nomina|nómina|modelo|303|130|349|390|impuesto|contab|balance|libro|ticket)/.test(n))
+    return "contable";
+  if (/(permiso|licencia|registro|solicitud|tramite|trámite|certificado|alta|baja)/.test(n))
+    return "administrativo";
+  return "general";
+}
+
+const STATUS_DOT: Record<Status, string> = {
+  reading: "bg-highlight animate-pulse",
+  ocr: "bg-highlight animate-pulse",
+  indexing: "bg-highlight animate-pulse",
+  done: "bg-viridian",
+  error: "bg-red-600",
+};
 
 export default function Uploader({ onAdded }: { onAdded: () => void }) {
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState<Category>("general");
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [items, setItems] = useState<Item[]>([]);
+  const [category, setCategory] = useState<Category | "auto">("auto");
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteTitle, setPasteTitle] = useState("");
+  const [pasteText, setPasteText] = useState("");
+  const nextId = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  async function handleFile(file: File) {
-    setError(null);
-    setBusy(true);
-    try {
-      const extracted = await extractText(file);
-      setText(extracted);
-      if (!title) setTitle(file.name.replace(/\.[^.]+$/, ""));
-    } catch {
-      setError("No pude leer ese archivo. Prueba con un .pdf, .txt, .md o .csv.");
-    } finally {
-      setBusy(false);
-    }
+  const busy = items.some((i) => i.status === "reading" || i.status === "ocr" || i.status === "indexing");
+
+  function update(id: number, patch: Partial<Item>) {
+    setItems((list) => list.map((it) => (it.id === id ? { ...it, ...patch } : it)));
   }
 
-  async function submit() {
-    setError(null);
-    setBusy(true);
+  async function ingestText(name: string, text: string, cat: Category, source: string, id: number) {
+    const chunks = chunkText(text);
+    if (chunks.length === 0) {
+      update(id, { status: "error", detail: "Documento vacío tras el procesado" });
+      return;
+    }
+    update(id, { status: "indexing", detail: `Indexando · 0/${chunks.length}` });
+    const { document } = await createDocument({ title: name, category: cat, source, charCount: text.length });
     try {
-      await ingestDocument({ title: title.trim(), text, category, source: title.trim() });
-      setTitle("");
-      setText("");
-      setCategory("general");
-      if (fileRef.current) fileRef.current.value = "";
-      onAdded();
+      for (let i = 0; i < chunks.length; i += BATCH) {
+        await storeChunks(document.id, chunks.slice(i, i + BATCH), i);
+        update(id, { detail: `Indexando · ${Math.min(i + BATCH, chunks.length)}/${chunks.length}` });
+      }
     } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
+      await deleteDocument(document.id).catch(() => {});
+      throw e;
+    }
+    update(id, { status: "done", detail: `${chunks.length} fragmentos indexados` });
+    onAdded();
+  }
+
+  async function processFile(file: File) {
+    const id = nextId.current++;
+    setItems((list) => [...list, { id, name: file.name, status: "reading", detail: "Leyendo…" }]);
+    try {
+      const text = await extractText(file, (p: Progress) =>
+        update(id, {
+          status: p.phase === "ocr" ? "ocr" : "reading",
+          detail:
+            p.phase === "ocr"
+              ? `Reconociendo texto con IA · pág. ${p.page}/${p.total}`
+              : `Leyendo · pág. ${p.page}/${p.total}`,
+        })
+      );
+      if (text.trim().length < 20) {
+        update(id, { status: "error", detail: "No se pudo extraer texto legible" });
+        return;
+      }
+      const cat: Category = category === "auto" ? guessCategory(file.name) : category;
+      await ingestText(file.name.replace(/\.[^.]+$/, ""), text, cat, file.name, id);
+    } catch (e) {
+      update(id, { status: "error", detail: (e as Error).message || "Error al procesar" });
     }
   }
 
-  const ready = title.trim().length > 1 && text.trim().length > 19 && !busy;
+  async function handleFiles(files: FileList | File[]) {
+    for (const f of Array.from(files)) await processFile(f); // sequential: clear progress, gentle on rate limits
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  async function submitPaste() {
+    if (pasteTitle.trim().length < 2 || pasteText.trim().length < 20) return;
+    const id = nextId.current++;
+    setItems((list) => [...list, { id, name: pasteTitle.trim(), status: "indexing", detail: "Indexando…" }]);
+    const cat: Category = category === "auto" ? "general" : category;
+    try {
+      await ingestText(pasteTitle.trim(), pasteText, cat, "texto pegado", id);
+      setPasteTitle("");
+      setPasteText("");
+      setPasteOpen(false);
+    } catch (e) {
+      update(id, { status: "error", detail: (e as Error).message });
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -51,60 +115,86 @@ export default function Uploader({ onAdded }: { onAdded: () => void }) {
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
-          if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+          if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
         }}
       >
-        <span className="text-sm font-medium text-ink">Arrastra un archivo o elígelo</span>
-        <span className="font-mono text-xs text-ink-soft">PDF · TXT · MD · CSV</span>
+        <span className="text-sm font-medium text-ink">Arrastra tus documentos o elígelos</span>
+        <span className="font-mono text-xs text-ink-soft">
+          PDF (también escaneados) · Word · imágenes · TXT · CSV
+        </span>
         <input
           ref={fileRef}
           type="file"
-          accept=".pdf,.txt,.md,.csv,.markdown"
+          multiple
+          accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif,.bmp"
           className="hidden"
-          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+          onChange={(e) => e.target.files?.length && handleFiles(e.target.files)}
         />
       </label>
 
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Título (p. ej. Contrato de alquiler local)"
-        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none placeholder:text-ink-soft/70 focus:border-viridian"
-      />
-
-      <div className="flex gap-2">
-        {CATEGORY_OPTIONS.map((c) => (
-          <button
-            key={c}
-            onClick={() => setCategory(c)}
-            className={`flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${
-              category === c
-                ? "border-viridian bg-viridian text-surface"
-                : "border-line bg-surface text-ink-soft hover:border-viridian"
-            }`}
-          >
-            {CATEGORY_LABEL[c]}
-          </button>
-        ))}
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-wide text-ink-soft">Área</span>
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value as Category | "auto")}
+          className="flex-1 rounded-md border border-line bg-surface px-2 py-1.5 text-xs outline-none focus:border-viridian"
+        >
+          <option value="auto">Detectar automáticamente</option>
+          {CATEGORY_OPTIONS.map((c) => (
+            <option key={c} value={c}>
+              {CATEGORY_LABEL[c]}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="…o pega aquí el texto del documento"
-        rows={4}
-        className="w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none placeholder:text-ink-soft/70 focus:border-viridian"
-      />
-
-      {error && <p className="text-xs text-red-700">{error}</p>}
+      {items.length > 0 && (
+        <ul className="space-y-1.5">
+          {items.map((it) => (
+            <li key={it.id} className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+              <span className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[it.status]}`} />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-ink">{it.name}</p>
+                <p className={`font-mono text-[10px] ${it.status === "error" ? "text-red-700" : "text-ink-soft"}`}>
+                  {it.detail}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <button
-        onClick={submit}
-        disabled={!ready}
-        className="w-full rounded-lg bg-viridian px-4 py-2.5 text-sm font-semibold text-surface transition-opacity hover:bg-viridian-ink disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={() => setPasteOpen((o) => !o)}
+        className="font-mono text-xs text-viridian underline-offset-2 hover:underline"
       >
-        {busy ? "Procesando…" : "Añadir al archivo"}
+        {pasteOpen ? "▾ Pegar texto" : "▸ …o pegar texto a mano"}
       </button>
+
+      {pasteOpen && (
+        <div className="space-y-2">
+          <input
+            value={pasteTitle}
+            onChange={(e) => setPasteTitle(e.target.value)}
+            placeholder="Título"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none placeholder:text-ink-soft/70 focus:border-viridian"
+          />
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder="Pega aquí el texto del documento"
+            rows={4}
+            className="w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none placeholder:text-ink-soft/70 focus:border-viridian"
+          />
+          <button
+            onClick={submitPaste}
+            disabled={busy || pasteTitle.trim().length < 2 || pasteText.trim().length < 20}
+            className="w-full rounded-lg bg-viridian px-4 py-2.5 text-sm font-semibold text-surface transition-opacity hover:bg-viridian-ink disabled:opacity-40"
+          >
+            Añadir texto
+          </button>
+        </div>
+      )}
     </div>
   );
 }

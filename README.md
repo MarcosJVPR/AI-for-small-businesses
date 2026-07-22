@@ -116,6 +116,18 @@ supabase/schema.sql          pgvector schema + match_chunks()
 
 ---
 
+## Robust ingestion
+
+Real small-business paperwork is messy, so ingestion is built to survive it:
+
+- **Scanned PDFs & photos** — if a PDF has no text layer (or you upload a JPG/PNG of a contract), each page is sent to Gemini's multimodal model for OCR, so image-only documents still become searchable. Tables are transcribed row by row.
+- **Word documents** — `.docx` is parsed in the browser via `mammoth`.
+- **Huge documents** — text is split client-side and embedded in small batches (`/api/chunks`), so a 300-page file never travels in one oversized request and never trips Vercel's body-size or timeout limits. Progress is shown per page and per batch.
+- **Many files at once** — drag a whole folder's worth; each file is queued with its own live status, and one bad file doesn't block the rest.
+- **Built for non-technical users** — category is auto-detected from the filename, titles are filled automatically, and failures show a plain-language reason instead of a stack trace.
+
+---
+
 ## Notes & next steps
 
 - **Chunking** is intentionally simple (fixed size + overlap on natural boundaries). A semantic or layout-aware splitter would improve retrieval on tables and forms.

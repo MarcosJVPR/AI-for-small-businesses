@@ -80,3 +80,17 @@ export async function generateAnswer(
   const res = await ai.models.generateContent({ model: CHAT_MODEL, contents: prompt, config });
   return res.text ?? "No pude generar una respuesta.";
 }
+
+export async function ocrImage(base64: string, mimeType: string): Promise<string> {
+  const res = await ai.models.generateContent({
+    model: CHAT_MODEL,
+    contents: [
+      { inlineData: { data: base64, mimeType } },
+      {
+        text: "Transcribe literalmente TODO el texto de este documento, respetando el orden de lectura. No resumas, no añadas comentarios ni explicaciones. Si hay tablas, transcríbelas fila por fila. Devuelve únicamente el texto.",
+      },
+    ],
+    config: { temperature: 0 },
+  });
+  return res.text ?? "";
+}

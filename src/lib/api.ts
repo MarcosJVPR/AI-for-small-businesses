@@ -29,21 +29,15 @@ async function json<T>(res: Response): Promise<T> {
   return data as T;
 }
 
-export function listDocuments(): Promise<{ documents: Doc[] }> {
-  return fetch("/api/documents").then((r) => json<{ documents: Doc[] }>(r));
-}
-
-export function ingestDocument(payload: {
-  title: string;
-  text: string;
-  category: Category;
-  source?: string;
-}): Promise<{ document: Doc; chunks: number }> {
-  return fetch("/api/ingest", {
+const post = (url: string, body: unknown) =>
+  fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).then((r) => json<{ document: Doc; chunks: number }>(r));
+    body: JSON.stringify(body),
+  });
+
+export function listDocuments(): Promise<{ documents: Doc[] }> {
+  return fetch("/api/documents").then((r) => json<{ documents: Doc[] }>(r));
 }
 
 export function deleteDocument(id: string): Promise<{ ok: true }> {
@@ -52,14 +46,33 @@ export function deleteDocument(id: string): Promise<{ ok: true }> {
   );
 }
 
+export function createDocument(payload: {
+  title: string;
+  category: Category;
+  source?: string;
+  charCount: number;
+}): Promise<{ document: Doc }> {
+  return post("/api/ingest", payload).then((r) => json<{ document: Doc }>(r));
+}
+
+export function storeChunks(
+  documentId: string,
+  chunks: string[],
+  startIndex: number
+): Promise<{ added: number }> {
+  return post("/api/chunks", { documentId, chunks, startIndex }).then((r) =>
+    json<{ added: number }>(r)
+  );
+}
+
+export function ocr(imageBase64: string, mimeType: string): Promise<{ text: string }> {
+  return post("/api/ocr", { imageBase64, mimeType }).then((r) => json<{ text: string }>(r));
+}
+
 export function askQuestion(
   question: string,
   category: Category | "all",
   useWeb = false
 ): Promise<Answer> {
-  return fetch("/api/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, category, useWeb }),
-  }).then((r) => json<Answer>(r));
+  return post("/api/query", { question, category, useWeb }).then((r) => json<Answer>(r));
 }

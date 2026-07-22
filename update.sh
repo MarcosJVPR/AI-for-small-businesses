@@ -1,6 +1,4 @@
-#!/usr/bin/env bash
-# Adds the explicit 'Search the web' toggle (off by default = documents only).
-# Run from the repo root:  bash update.sh
+
 set -euo pipefail
 echo "→ Updating 4 files for the web-search toggle…"
 

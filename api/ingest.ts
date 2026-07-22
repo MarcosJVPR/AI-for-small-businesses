@@ -1,51 +1,36 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabase } from "./_lib/supabase";
-import { chunkText } from "./_lib/chunk";
-import { embedDocuments } from "./_lib/gemini";
+
+export const config = { maxDuration: 30 };
 
 const CATEGORIES = ["legal", "contable", "administrativo", "general"];
-const MAX_CHARS = 200_000;
 
+// Creates the document row. Chunks are embedded and stored separately, in
+// small batches, via /api/chunks — so a 300-page file never travels in one
+// oversized, slow request.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-
   try {
-    const { title, text, category = "general", source } = req.body ?? {};
-
-    if (!title || typeof title !== "string") return res.status(400).json({ error: "Falta 'title'" });
-    if (!text || typeof text !== "string" || text.trim().length < 20)
-      return res.status(400).json({ error: "El documento está vacío o es demasiado corto" });
-    if (text.length > MAX_CHARS)
-      return res.status(413).json({ error: `El documento supera ${MAX_CHARS} caracteres` });
+    const { title, category = "general", source, charCount = 0 } = req.body ?? {};
+    if (!title || typeof title !== "string")
+      return res.status(400).json({ error: "Falta 'title'" });
 
     const cat = CATEGORIES.includes(category) ? category : "general";
-    const chunks = chunkText(text);
-    if (chunks.length === 0) return res.status(400).json({ error: "No se pudo extraer contenido" });
-
-    const { data: doc, error: docErr } = await supabase
+    const { data: doc, error } = await supabase
       .from("documents")
-      .insert({ title: title.trim(), category: cat, source: source ?? null, char_count: text.length })
+      .insert({
+        title: title.trim().slice(0, 200),
+        category: cat,
+        source: source ?? null,
+        char_count: Number(charCount) || 0,
+      })
       .select("id, title, category, char_count, created_at")
       .single();
-    if (docErr) throw docErr;
+    if (error) throw error;
 
-    const embeddings = await embedDocuments(chunks);
-    const rows = chunks.map((content, i) => ({
-      document_id: doc.id,
-      chunk_index: i,
-      content,
-      embedding: embeddings[i],
-    }));
-
-    const { error: chunkErr } = await supabase.from("chunks").insert(rows);
-    if (chunkErr) {
-      await supabase.from("documents").delete().eq("id", doc.id);
-      throw chunkErr;
-    }
-
-    return res.status(200).json({ document: doc, chunks: chunks.length });
+    return res.status(200).json({ document: doc });
   } catch (err) {
     console.error("ingest error:", err);
-    return res.status(500).json({ error: "No se pudo procesar el documento" });
+    return res.status(500).json({ error: "No se pudo crear el documento" });
   }
 }
