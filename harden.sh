@@ -1,6 +1,3 @@
-#!/usr/bin/env bash
-# Robust ingestion: OCR for scans/photos, .docx, huge-file batching, multi-file queue.
-# Run from the repo root:  bash harden.sh   then   npm install
 set -euo pipefail
 echo "→ Applying robust-ingestion upgrade…"
 

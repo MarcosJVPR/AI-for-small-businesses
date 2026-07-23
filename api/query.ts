@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { supabase } from "./_lib/supabase";
-import { embedQuery, generateAnswer, type Passage } from "./_lib/gemini";
+import { supabase } from "./_lib/supabase.js";
+import { embedQuery, generateAnswer, type Passage } from "./_lib/gemini.js";
 
 const MATCH_COUNT = 6;
 const MIN_SIMILARITY = 0.35; // below this, retrieved chunks are treated as irrelevant
