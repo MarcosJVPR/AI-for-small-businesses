@@ -4,7 +4,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 const EMBED_MODEL = "gemini-embedding-001";
 const EMBED_DIM = 768;
-const CHAT_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+const CHAT_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.6-flash";
 
 type Task = "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
 

@@ -1,3 +1,124 @@
+#!/usr/bin/env bash
+# Fixes: gemini-2.5-flash is no longer available to new users (404).
+# Switches the default chat model to gemini-3.6-flash (GA as of July 2026).
+# Run from the repo root:  bash fixmodel.sh
+set -euo pipefail
+echo "→ Updating default Gemini model…"
+
+cat > "api/_lib/gemini.ts" <<'__PYME_COPILOT_EOF__'
+import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+
+const EMBED_MODEL = "gemini-embedding-001";
+const EMBED_DIM = 768;
+const CHAT_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.6-flash";
+
+type Task = "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
+
+async function embedOne(text: string, taskType: Task): Promise<number[]> {
+  const res = await ai.models.embedContent({
+    model: EMBED_MODEL,
+    contents: text,
+    config: { outputDimensionality: EMBED_DIM, taskType },
+  });
+  const values = res.embeddings?.[0]?.values;
+  if (!values) throw new Error("No embedding returned");
+  return values;
+}
+
+export function embedQuery(text: string): Promise<number[]> {
+  return embedOne(text, "RETRIEVAL_QUERY");
+}
+
+// Embed many chunks with light concurrency so ingestion stays fast but polite.
+export async function embedDocuments(texts: string[]): Promise<number[][]> {
+  const out: number[][] = new Array(texts.length);
+  const BATCH = 5;
+  for (let i = 0; i < texts.length; i += BATCH) {
+    const slice = texts.slice(i, i + BATCH);
+    const res = await Promise.all(slice.map((t) => embedOne(t, "RETRIEVAL_DOCUMENT")));
+    res.forEach((v, j) => (out[i + j] = v));
+  }
+  return out;
+}
+
+export type Passage = {
+  n: number;
+  documentTitle: string;
+  category: string;
+  content: string;
+};
+
+const SYSTEM_STRICT = `Eres el copiloto de una micro-empresa. Respondes preguntas de tipo legal, contable y administrativo APOYÁNDOTE ÚNICAMENTE en los fragmentos de documentos que se te entregan.
+
+Reglas:
+- Usa SOLO la información de los fragmentos. No uses conocimiento propio ni general.
+- Si la respuesta no está en los fragmentos, dilo con claridad ("No encuentro esto en tus documentos") y sugiere qué documento haría falta. No la deduzcas de tu memoria.
+- Cita cada afirmación con el número del fragmento entre corchetes, por ejemplo [1] o [2][3].
+- No inventes cifras, plazos, artículos ni cláusulas. Si dudas, no lo afirmes.
+- Responde en el idioma de la pregunta, de forma directa y breve.
+- No eres un abogado ni un asesor fiscal colegiado: cierra con una línea recordando que conviene validar decisiones críticas con un profesional.`;
+
+const SYSTEM_WEB = `Eres el copiloto de una micro-empresa. Respondes preguntas de tipo legal, contable y administrativo.
+
+Reglas:
+- Prioriza SIEMPRE los fragmentos de los documentos del usuario y cítalos con su número entre corchetes, por ejemplo [1] o [2][3].
+- El usuario ha permitido búsqueda web para esta pregunta. Úsala solo para completar lo que falte en los documentos, y cuando lo hagas, indícalo explícitamente ("según información pública…").
+- No mezcles ni presentes información web como si viniera de los documentos del usuario.
+- No inventes cifras, plazos, artículos ni cláusulas.
+- Responde en el idioma de la pregunta, de forma directa y breve.
+- No eres un abogado ni un asesor fiscal colegiado: cierra recordando validar decisiones críticas con un profesional.`;
+
+export async function generateAnswer(
+  question: string,
+  passages: Passage[],
+  useWeb = false
+): Promise<string> {
+  const context = passages.length
+    ? passages.map((p) => `[${p.n}] (${p.category} — ${p.documentTitle})\n${p.content}`).join("\n\n")
+    : "(no hay fragmentos relevantes en los documentos del usuario)";
+
+  const system = useWeb ? SYSTEM_WEB : SYSTEM_STRICT;
+  const prompt = `${system}\n\n=== FRAGMENTOS ===\n${context}\n\n=== PREGUNTA ===\n${question}`;
+
+  const config: Record<string, unknown> = { temperature: 0.2 };
+  if (useWeb) config.tools = [{ googleSearch: {} }];
+
+  const res = await ai.models.generateContent({ model: CHAT_MODEL, contents: prompt, config });
+  return res.text ?? "No pude generar una respuesta.";
+}
+
+export async function ocrImage(base64: string, mimeType: string): Promise<string> {
+  const res = await ai.models.generateContent({
+    model: CHAT_MODEL,
+    contents: [
+      { inlineData: { data: base64, mimeType } },
+      {
+        text: "Transcribe literalmente TODO el texto de este documento, respetando el orden de lectura. No resumas, no añadas comentarios ni explicaciones. Si hay tablas, transcríbelas fila por fila. Devuelve únicamente el texto.",
+      },
+    ],
+    config: { temperature: 0 },
+  });
+  return res.text ?? "";
+}
+__PYME_COPILOT_EOF__
+echo "   updated api/_lib/gemini.ts"
+
+cat > ".env.example" <<'__PYME_COPILOT_EOF__'
+# Gemini (Google AI Studio) — https://aistudio.google.com/apikey
+GEMINI_API_KEY=
+# Optional: override the chat model. Defaults to gemini-3.6-flash.
+# GEMINI_MODEL=gemini-3.5-flash-lite
+
+# Supabase — Project settings → API
+SUPABASE_URL=https://xxxxxxxx.supabase.co
+# service_role key. SERVER-SIDE ONLY. Never expose in the browser / never prefix with VITE_.
+SUPABASE_SERVICE_ROLE_KEY=
+__PYME_COPILOT_EOF__
+echo "   updated .env.example"
+
+cat > "README.md" <<'__PYME_COPILOT_EOF__'
 # PYME Copilot
 
 **An AI copilot that answers a micro-business's legal, accounting and administrative questions — grounded in its own documents.** Upload contracts, invoices, payslips or tax forms; ask questions in plain language; get answers that cite the exact passage they came from.
@@ -134,3 +255,12 @@ Real small-business paperwork is messy, so ingestion is built to survive it:
 - **Embeddings** are truncated to 768 dims via Matryoshka — cheaper and index-friendly (pgvector indexes cap at 2000 dims) with negligible quality loss vs. the full 3072.
 - **Evaluation**: the obvious next layer is a small golden-question set to measure retrieval hit-rate and answer faithfulness before touching the prompt.
 - Swap the chat model with `GEMINI_MODEL` (e.g. `gemini-3.5-flash-lite` for lower cost) without code changes.
+__PYME_COPILOT_EOF__
+echo "   updated README.md"
+
+echo ""
+echo "✓ Done. Commit and push:"
+echo "    git add -A && git commit -m \"fix: use gemini-3.6-flash\" && git push"
+echo ""
+echo "Note: if you set GEMINI_MODEL in Vercel env vars, update or remove it too —"
+echo "an explicit env var overrides this default."
